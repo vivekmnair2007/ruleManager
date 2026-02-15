@@ -1,0 +1,14 @@
+# Copy to .npmrc and replace placeholders.
+# Use your internal registry URL, e.g.:
+# NPM_REGISTRY_URL=https://npm.company.internal/repository/npm/
+
+registry=${NPM_REGISTRY_URL}
+strict-ssl=true
+
+# If your org requires auth token, keep this line and set NPM_TOKEN.
+# IMPORTANT: NPM_REGISTRY_HOST must be host/path only (no protocol), e.g.
+# npm.company.internal/repository/npm/
+//${NPM_REGISTRY_HOST}:_authToken=${NPM_TOKEN}
+
+# Keep Prisma scoped packages on the same approved registry.
+@prisma:registry=${NPM_REGISTRY_URL}
