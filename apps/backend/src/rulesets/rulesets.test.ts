@@ -2,76 +2,119 @@ import assert from "node:assert/strict";
 import {
   activateRulesetVersion,
   addRulesetEntry,
-  getRulesetEntryEtag,
-  getRulesetTable,
-  getRulesetTableEntries,
-  getRulesetVersionEtag,
+  ApiError,
   updateRulesetVersionSettings
 } from "./service.js";
 
+type RulesetVersion = {
+  rulesetVersionId: string;
+  rulesetId: string;
+  versionNumber: number;
+  status: "DRAFT" | "APPROVED" | "ACTIVE";
+  executionMode: "SEQUENTIAL" | "PARALLEL";
+  decisionPrecedence: unknown;
+  createdBy: string;
+  createdAt: Date;
+  approvedBy: string | null;
+  approvedAt: Date | null;
+  activatedBy: string | null;
+  activatedAt: Date | null;
+};
+
+type RuleVersion = {
+  ruleVersionId: string;
+  ruleId: string;
+  status: "DRAFT" | "APPROVED";
+  rule: { archivedAt: Date | null };
+};
+
+type Entry = {
+  entryId: string;
+  rulesetVersionId: string;
+  ruleId: string;
+  ruleVersionId: string;
+  enabled: boolean;
+  orderPriority: number | null;
+};
+
 function makePrismaFixture() {
-  const rulesets = [
-    { rulesetId: "rs1", name: "Alpha", tags: ["risk"], createdAt: new Date(), description: "", createdBy: "u", lastUpdatedAt: new Date() },
-    { rulesetId: "rs2", name: "Beta", tags: ["ops"], createdAt: new Date(), description: "", createdBy: "u", lastUpdatedAt: new Date() }
+  const rulesetVersions: RulesetVersion[] = [
+    {
+      rulesetVersionId: "rv1",
+      rulesetId: "rs1",
+      versionNumber: 1,
+      status: "ACTIVE",
+      executionMode: "SEQUENTIAL",
+      decisionPrecedence: null,
+      createdBy: "a",
+      createdAt: new Date(),
+      approvedBy: "a",
+      approvedAt: new Date(),
+      activatedBy: "a",
+      activatedAt: new Date()
+    },
+    {
+      rulesetVersionId: "rv2",
+      rulesetId: "rs1",
+      versionNumber: 2,
+      status: "APPROVED",
+      executionMode: "SEQUENTIAL",
+      decisionPrecedence: null,
+      createdBy: "a",
+      createdAt: new Date(),
+      approvedBy: "a",
+      approvedAt: new Date(),
+      activatedBy: null,
+      activatedAt: null
+    }
   ];
 
-  const rulesetVersions: any[] = [
-    { rulesetVersionId: "rv1", rulesetId: "rs1", versionNumber: 1, status: "ACTIVE", executionMode: "SEQUENTIAL", decisionPrecedence: null, createdBy: "a", createdAt: new Date("2026-01-01"), approvedBy: "a", approvedAt: new Date(), activatedBy: "a", activatedAt: new Date(), ruleset: rulesets[0] },
-    { rulesetVersionId: "rv2", rulesetId: "rs1", versionNumber: 2, status: "APPROVED", executionMode: "SEQUENTIAL", decisionPrecedence: null, createdBy: "a", createdAt: new Date("2026-01-02"), approvedBy: "a", approvedAt: new Date(), activatedBy: null, activatedAt: null, ruleset: rulesets[0] }
+  const ruleVersions: RuleVersion[] = [
+    { ruleVersionId: "rule-v1", ruleId: "rule-1", status: "APPROVED", rule: { archivedAt: null } }
   ];
-  const ruleVersions: any[] = [
-    { ruleVersionId: "rule-v1", ruleId: "rule-1", status: "APPROVED", versionNumber: 1, description: "BLOCK if ...", rule: { archivedAt: null, name: "R1", type: "FRAUD", tags: ["risk"] } },
-    { ruleVersionId: "rule-v2", ruleId: "rule-2", status: "APPROVED", versionNumber: 1, description: "ALLOW if ...", rule: { archivedAt: null, name: "A1", type: "BUSINESS", tags: ["ops"] } }
-  ];
-  const entries: any[] = [];
-  let lastEntriesWhere: any = null;
 
-  const prisma: any = {
+  const entries: Entry[] = [];
+
+  const prisma = {
     $transaction: async (fn: (tx: any) => Promise<unknown>) => fn(prisma),
     rulesetVersion: {
       findUnique: async ({ where: { rulesetVersionId } }: any) => rulesetVersions.find((v) => v.rulesetVersionId === rulesetVersionId) ?? null,
       updateMany: async ({ where, data }: any) => {
+        let count = 0;
         for (const v of rulesetVersions) {
           if (v.rulesetId === where.rulesetId && v.status === where.status && v.rulesetVersionId !== where.NOT.rulesetVersionId) {
-            Object.assign(v, data);
+            v.status = data.status;
+            v.activatedAt = data.activatedAt;
+            v.activatedBy = data.activatedBy;
+            count += 1;
           }
         }
-        return { count: 1 };
+        return { count };
       },
       update: async ({ where: { rulesetVersionId }, data }: any) => {
         const found = rulesetVersions.find((v) => v.rulesetVersionId === rulesetVersionId);
+        if (!found) {
+          throw new Error("missing");
+        }
         Object.assign(found, data);
         return found;
-      },
-      findMany: async ({ where }: any) =>
-        rulesetVersions
-          .filter((v) => (!where.status || v.status === where.status) && (!where.executionMode || v.executionMode === where.executionMode))
-          .filter((v) => {
-            if (!where.ruleset) return true;
-            const q = where.ruleset.OR[0].name.contains.toLowerCase();
-            return v.ruleset.name.toLowerCase().includes(q) || v.ruleset.tags.includes(q);
-          })
-          .map((v) => ({ ...v, entries: entries.filter((e) => e.rulesetVersionId === v.rulesetVersionId) }))
+      }
     },
     ruleVersion: {
       findUnique: async ({ where: { ruleVersionId } }: any) => ruleVersions.find((v) => v.ruleVersionId === ruleVersionId) ?? null
     },
     rulesetEntry: {
       findFirst: async ({ where }: any) =>
-        entries.find((e) => e.rulesetVersionId === where.rulesetVersionId && (where.ruleVersionId ? e.ruleVersionId === where.ruleVersionId : e.orderPriority === where.orderPriority) && (!where.NOT || e.entryId !== where.NOT.entryId)) ?? null,
+        entries.find((e) => e.rulesetVersionId === where.rulesetVersionId && (where.ruleVersionId ? e.ruleVersionId === where.ruleVersionId : e.orderPriority === where.orderPriority)) ?? null,
       create: async ({ data }: any) => {
-        const created = { entryId: `e${entries.length + 1}`, lastUpdatedAt: new Date(), ...data };
+        const created: Entry = { entryId: `e${entries.length + 1}`, ...data };
         entries.push(created);
         return created;
-      },
-      findMany: async ({ where }: any) => {
-        lastEntriesWhere = where;
-        return entries.filter((e) => e.rulesetVersionId === where.rulesetVersionId).map((e) => ({ ...e, rule: ruleVersions.find((r) => r.ruleId === e.ruleId).rule, ruleVersion: ruleVersions.find((r) => r.ruleVersionId === e.ruleVersionId) }));
       }
     }
   };
 
-  return { prisma, rulesetVersions, entries, ruleVersions, getLastEntriesWhere: () => lastEntriesWhere };
+  return { prisma, rulesetVersions, entries };
 }
 
 {
