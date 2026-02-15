@@ -101,3 +101,26 @@ npm install
 ```
 
 If your internal registry uses a private CA, install that CA in the runner trust store rather than setting `strict-ssl=false`.
+# ruleManager
+
+A fresh Python starter for building a rule management library/application.
+
+## Quickstart
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -e .
+```
+
+## Run
+
+```bash
+python -m rule_manager
+```
+
+## Test
+
+```bash
+python -m unittest discover -s tests -p 'test_*.py'
+```
