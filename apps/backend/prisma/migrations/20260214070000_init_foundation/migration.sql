@@ -4,6 +4,7 @@ CREATE TYPE rule_type AS ENUM ('FRAUD', 'BUSINESS');
 CREATE TYPE rule_version_status AS ENUM ('DRAFT', 'APPROVED');
 CREATE TYPE ruleset_version_status AS ENUM ('DRAFT', 'APPROVED', 'ACTIVE');
 CREATE TYPE execution_mode AS ENUM ('SEQUENTIAL', 'PARALLEL');
+CREATE TYPE description_source AS ENUM ('MANUAL', 'TEMPLATE', 'GENAI');
 
 CREATE TABLE rule (
   rule_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -27,6 +28,9 @@ CREATE TABLE rule_version (
   status rule_version_status NOT NULL DEFAULT 'DRAFT',
   logic_ast JSONB NOT NULL,
   decision JSONB NOT NULL,
+  description TEXT NULL,
+  description_source description_source NOT NULL DEFAULT 'TEMPLATE',
+  description_generated_at TIMESTAMPTZ NULL,
   change_summary TEXT NULL,
   created_by TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),

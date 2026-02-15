@@ -28,6 +28,12 @@ enum ExecutionMode {
   PARALLEL
 }
 
+enum DescriptionSource {
+  MANUAL
+  TEMPLATE
+  GENAI
+}
+
 model Rule {
   ruleId         String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid @map("rule_id")
   name           String
@@ -53,6 +59,9 @@ model RuleVersion {
   status         RuleVersionStatus @default(DRAFT)
   logicAst       Json              @map("logic_ast")
   decision       Json
+  description    String?
+  descriptionSource DescriptionSource @default(TEMPLATE) @map("description_source")
+  descriptionGeneratedAt DateTime? @map("description_generated_at") @db.Timestamptz(6)
   changeSummary  String?           @map("change_summary")
   createdBy      String            @map("created_by")
   createdAt      DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
