@@ -159,6 +159,56 @@ EXECUTE FUNCTION prevent_rule_version_delete_after_approval();
 CREATE OR REPLACE FUNCTION prevent_ruleset_version_mutation_after_lock()
 RETURNS TRIGGER AS $$
 BEGIN
+  IF OLD.status = 'APPROVED' AND NEW.status = 'ACTIVE' THEN
+    IF ROW(
+      OLD.ruleset_id,
+      OLD.version_number,
+      OLD.execution_mode,
+      OLD.decision_precedence,
+      OLD.created_by,
+      OLD.created_at,
+      OLD.approved_by,
+      OLD.approved_at
+    ) IS DISTINCT FROM ROW(
+      NEW.ruleset_id,
+      NEW.version_number,
+      NEW.execution_mode,
+      NEW.decision_precedence,
+      NEW.created_by,
+      NEW.created_at,
+      NEW.approved_by,
+      NEW.approved_at
+    ) THEN
+      RAISE EXCEPTION 'ruleset_version % can only change activation fields when transitioning APPROVED -> ACTIVE', OLD.ruleset_version_id;
+    END IF;
+    RETURN NEW;
+  END IF;
+
+  IF OLD.status = 'ACTIVE' AND NEW.status = 'APPROVED' THEN
+    IF ROW(
+      OLD.ruleset_id,
+      OLD.version_number,
+      OLD.execution_mode,
+      OLD.decision_precedence,
+      OLD.created_by,
+      OLD.created_at,
+      OLD.approved_by,
+      OLD.approved_at
+    ) IS DISTINCT FROM ROW(
+      NEW.ruleset_id,
+      NEW.version_number,
+      NEW.execution_mode,
+      NEW.decision_precedence,
+      NEW.created_by,
+      NEW.created_at,
+      NEW.approved_by,
+      NEW.approved_at
+    ) THEN
+      RAISE EXCEPTION 'ruleset_version % can only change activation fields when transitioning ACTIVE -> APPROVED', OLD.ruleset_version_id;
+    END IF;
+    RETURN NEW;
+  END IF;
+
   IF OLD.status IN ('APPROVED', 'ACTIVE') THEN
     RAISE EXCEPTION 'ruleset_version % is immutable after APPROVED/ACTIVE', OLD.ruleset_version_id;
   END IF;
@@ -204,7 +254,40 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+CREATE OR REPLACE FUNCTION prevent_ruleset_entry_mutation_when_parent_locked()
+RETURNS TRIGGER AS $$
+DECLARE
+  v_ruleset_version_id UUID;
+  v_status ruleset_version_status;
+BEGIN
+  v_ruleset_version_id = CASE
+    WHEN TG_OP = 'DELETE' THEN OLD.ruleset_version_id
+    ELSE NEW.ruleset_version_id
+  END;
+
+  SELECT status
+    INTO v_status
+  FROM ruleset_version
+  WHERE ruleset_version_id = v_ruleset_version_id;
+
+  IF v_status IN ('APPROVED', 'ACTIVE') THEN
+    RAISE EXCEPTION 'ruleset_entry cannot be % when parent ruleset_version % is %', LOWER(TG_OP), v_ruleset_version_id, v_status;
+  END IF;
+
+  IF TG_OP = 'DELETE' THEN
+    RETURN OLD;
+  END IF;
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
 CREATE TRIGGER trg_ruleset_entry_validate_order_priority
 BEFORE INSERT OR UPDATE ON ruleset_entry
 FOR EACH ROW
 EXECUTE FUNCTION validate_ruleset_entry_order_priority();
+
+CREATE TRIGGER trg_ruleset_entry_no_mutation_when_parent_locked
+BEFORE INSERT OR UPDATE OR DELETE ON ruleset_entry
+FOR EACH ROW
+EXECUTE FUNCTION prevent_ruleset_entry_mutation_when_parent_locked();
