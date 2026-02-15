@@ -5,11 +5,13 @@ import { attachDemoUser } from "./auth/demoAuth.js";
 import { prisma } from "./db.js";
 import { stripWeakEtag } from "./httpEtag.js";
 import {
+  getRuleDetail,
   getRuleEtag,
   getRuleVersionEtag,
   patchDraftRuleVersion,
   patchRuleMetadata,
-  saveDraftRuleVersion
+  saveDraftRuleVersion,
+  tryRuleVersion
 } from "./rules/service.js";
 import {
   addRulesetEntry,
@@ -78,6 +80,17 @@ app.post("/rule-versions/draft", async (req, res) => {
   }
 });
 
+
+app.get("/v1/rules/:ruleId", async (req, res) => {
+  try {
+    const detail = await getRuleDetail(prisma, req.params.ruleId);
+    res.setHeader("ETag", getRuleEtag(detail));
+    res.json(detail);
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
 app.patch("/v1/rules/:ruleId", async (req, res) => {
   try {
     const current = await prisma.rule.findUnique({ where: { ruleId: req.params.ruleId } });
@@ -107,6 +120,16 @@ app.patch("/v1/rule-versions/:ruleVersionId", async (req, res) => {
     const updated = await patchDraftRuleVersion(prisma, req.params.ruleVersionId, req.body);
     res.setHeader("ETag", getRuleVersionEtag(updated));
     res.json(updated);
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
+
+app.post(/^\/v1\/rule-versions\/([^/]+):try$/, async (req, res) => {
+  try {
+    const result = await tryRuleVersion(prisma, req.params[0], req.body);
+    res.json(result);
   } catch (error) {
     handleError(res, error);
   }
