@@ -3,12 +3,11 @@ import { createEtagFromParts } from "../httpEtag.js";
 
 export class ApiError extends Error {
   constructor(public statusCode: number, message: string, public details?: unknown) {
-
-export class ApiError extends Error {
-  constructor(public statusCode: number, message: string) {
     super(message);
   }
 }
+
+type BulkOperation = "ENABLE" | "DISABLE" | "REMOVE" | "REORDER";
 
 function requireDecisionPrecedenceForParallel(executionMode: ExecutionMode, decisionPrecedence: Prisma.JsonValue | null) {
   if (executionMode === "PARALLEL" && (decisionPrecedence === null || decisionPrecedence === undefined)) {
@@ -51,38 +50,6 @@ export async function createRulesetWithDraft(
   requireDecisionPrecedenceForParallel(input.executionMode, input.decisionPrecedence ?? null);
   return prisma.$transaction(async (tx) => {
     const ruleset = await tx.ruleset.create({ data: { name: input.name, description: input.description, tags: input.tags ?? [], createdBy: input.createdBy } });
-  if (statuses.includes("ACTIVE")) {
-    return "ACTIVE";
-  }
-  if (statuses.includes("APPROVED")) {
-    return "APPROVED";
-  }
-  return "DRAFT";
-}
-
-export async function createRulesetWithDraft(
-  prisma: PrismaClient,
-  input: {
-    name: string;
-    description: string;
-    tags?: string[];
-    executionMode: ExecutionMode;
-    decisionPrecedence?: Prisma.JsonValue | null;
-    createdBy: string;
-  }
-) {
-  requireDecisionPrecedenceForParallel(input.executionMode, input.decisionPrecedence ?? null);
-
-  return prisma.$transaction(async (tx) => {
-    const ruleset = await tx.ruleset.create({
-      data: {
-        name: input.name,
-        description: input.description,
-        tags: input.tags ?? [],
-        createdBy: input.createdBy
-      }
-    });
-
     const version = await tx.rulesetVersion.create({
       data: {
         rulesetId: ruleset.rulesetId,
@@ -93,7 +60,6 @@ export async function createRulesetWithDraft(
         createdBy: input.createdBy
       }
     });
-
     return { ruleset, version };
   });
 }
@@ -106,44 +72,12 @@ export async function getRulesetDetail(prisma: PrismaClient, rulesetId: string) 
   const ruleset = await prisma.ruleset.findUnique({ where: { rulesetId }, include: { versions: { orderBy: { versionNumber: "desc" } } } });
   if (!ruleset) throw new ApiError(404, "ruleset not found");
   return { ...ruleset, derivedStatus: deriveRulesetStatus(ruleset.versions.map((v) => v.status)) };
-  return prisma.ruleset.findMany({
-    orderBy: { createdAt: "desc" }
-  });
-}
-
-export async function getRulesetDetail(prisma: PrismaClient, rulesetId: string) {
-  const ruleset = await prisma.ruleset.findUnique({
-    where: { rulesetId },
-    include: {
-      versions: {
-        orderBy: { versionNumber: "desc" }
-      }
-    }
-  });
-
-  if (!ruleset) {
-    throw new ApiError(404, "ruleset not found");
-  }
-
-  return {
-    ...ruleset,
-    derivedStatus: deriveRulesetStatus(ruleset.versions.map((v) => v.status))
-  };
 }
 
 export async function createRulesetVersion(prisma: PrismaClient, rulesetId: string, createdBy: string) {
   return prisma.$transaction(async (tx) => {
     const latest = await tx.rulesetVersion.findFirst({ where: { rulesetId }, orderBy: { versionNumber: "desc" }, include: { entries: true } });
     if (!latest) throw new ApiError(404, "ruleset not found or has no versions");
-    const latest = await tx.rulesetVersion.findFirst({
-      where: { rulesetId },
-      orderBy: { versionNumber: "desc" },
-      include: { entries: true }
-    });
-
-    if (!latest) {
-      throw new ApiError(404, "ruleset not found or has no versions");
-    }
 
     const nextVersion = await tx.rulesetVersion.create({
       data: {
@@ -167,7 +101,6 @@ export async function createRulesetVersion(prisma: PrismaClient, rulesetId: stri
         }))
       });
     }
-
     return nextVersion;
   });
 }
@@ -180,25 +113,12 @@ export async function updateRulesetVersionSettings(
   const current = await prisma.rulesetVersion.findUnique({ where: { rulesetVersionId } });
   if (!current) throw new ApiError(404, "ruleset version not found");
   if (current.status !== "DRAFT") throw new ApiError(409, "only DRAFT ruleset versions can be edited");
-  if (!current) {
-    throw new ApiError(404, "ruleset version not found");
-  }
-  if (current.status !== "DRAFT") {
-    throw new ApiError(409, "only DRAFT ruleset versions can be edited");
-  }
 
   const executionMode = input.executionMode ?? current.executionMode;
   const decisionPrecedence = input.decisionPrecedence !== undefined ? input.decisionPrecedence : current.decisionPrecedence;
   requireDecisionPrecedenceForParallel(executionMode, decisionPrecedence);
 
   return prisma.rulesetVersion.update({ where: { rulesetVersionId }, data: { executionMode, decisionPrecedence } });
-  return prisma.rulesetVersion.update({
-    where: { rulesetVersionId },
-    data: {
-      executionMode,
-      decisionPrecedence
-    }
-  });
 }
 
 export async function approveRulesetVersion(prisma: PrismaClient, rulesetVersionId: string, actor: string) {
@@ -207,21 +127,6 @@ export async function approveRulesetVersion(prisma: PrismaClient, rulesetVersion
   if (current.status !== "DRAFT") throw new ApiError(409, "only DRAFT ruleset versions can be approved");
 
   return prisma.rulesetVersion.update({ where: { rulesetVersionId }, data: { status: "APPROVED", approvedBy: actor, approvedAt: new Date() } });
-  if (!current) {
-    throw new ApiError(404, "ruleset version not found");
-  }
-  if (current.status !== "DRAFT") {
-    throw new ApiError(409, "only DRAFT ruleset versions can be approved");
-  }
-
-  return prisma.rulesetVersion.update({
-    where: { rulesetVersionId },
-    data: {
-      status: "APPROVED",
-      approvedBy: actor,
-      approvedAt: new Date()
-    }
-  });
 }
 
 async function activateRulesetVersionInternal(prisma: PrismaClient, rulesetVersionId: string, actor: string, expectedRulesetId?: string) {
@@ -237,37 +142,6 @@ async function activateRulesetVersionInternal(prisma: PrismaClient, rulesetVersi
     });
 
     return tx.rulesetVersion.update({ where: { rulesetVersionId }, data: { status: "ACTIVE", activatedAt: new Date(), activatedBy: actor } });
-    if (!target) {
-      throw new ApiError(404, "ruleset version not found");
-    }
-    if (expectedRulesetId && target.rulesetId !== expectedRulesetId) {
-      throw new ApiError(400, "rulesetVersionId does not belong to the specified ruleset");
-    }
-    if (target.status !== "APPROVED") {
-      throw new ApiError(409, "only APPROVED versions can be activated");
-    }
-
-    await tx.rulesetVersion.updateMany({
-      where: {
-        rulesetId: target.rulesetId,
-        status: "ACTIVE",
-        NOT: { rulesetVersionId }
-      },
-      data: {
-        status: "APPROVED",
-        activatedAt: null,
-        activatedBy: null
-      }
-    });
-
-    return tx.rulesetVersion.update({
-      where: { rulesetVersionId },
-      data: {
-        status: "ACTIVE",
-        activatedAt: new Date(),
-        activatedBy: actor
-      }
-    });
   });
 }
 
@@ -296,72 +170,6 @@ export async function addRulesetEntry(prisma: PrismaClient, rulesetVersionId: st
     if (input.orderPriority === undefined || input.orderPriority === null) throw new ApiError(400, "orderPriority is required for SEQUENTIAL execution mode");
     const takenOrder = await prisma.rulesetEntry.findFirst({ where: { rulesetVersionId, orderPriority: input.orderPriority } });
     if (takenOrder) throw new ApiError(409, "orderPriority must be unique within a SEQUENTIAL draft ruleset version");
-export async function rollbackActivateRulesetVersion(
-  prisma: PrismaClient,
-  rulesetId: string,
-  rulesetVersionId: string,
-  actor: string
-) {
-  return activateRulesetVersionInternal(prisma, rulesetVersionId, actor, rulesetId);
-}
-
-export async function addRulesetEntry(
-  prisma: PrismaClient,
-  rulesetVersionId: string,
-  input: { ruleVersionId: string; enabled?: boolean; orderPriority?: number }
-) {
-  const rulesetVersion = await prisma.rulesetVersion.findUnique({ where: { rulesetVersionId } });
-  if (!rulesetVersion) {
-    throw new ApiError(404, "ruleset version not found");
-  }
-  if (rulesetVersion.status !== "DRAFT") {
-    throw new ApiError(409, "entries can only be added to DRAFT ruleset versions");
-  }
-  if (rulesetVersion.executionMode === "PARALLEL" && !rulesetVersion.decisionPrecedence) {
-    throw new ApiError(400, "decisionPrecedence must be defined for PARALLEL execution mode");
-  }
-
-  const ruleVersion = await prisma.ruleVersion.findUnique({
-    where: { ruleVersionId: input.ruleVersionId },
-    include: { rule: true }
-  });
-  if (!ruleVersion) {
-    throw new ApiError(404, "rule version not found");
-  }
-
-  if (ruleVersion.rule.archivedAt) {
-    throw new ApiError(400, "cannot add an archived rule");
-  }
-
-  if (rulesetVersion.status !== "DRAFT" && ruleVersion.status === "DRAFT") {
-    throw new ApiError(400, "cannot add DRAFT rule_version to non-draft ruleset_version");
-  }
-
-  const existing = await prisma.rulesetEntry.findFirst({
-    where: {
-      rulesetVersionId,
-      ruleVersionId: ruleVersion.ruleVersionId
-    }
-  });
-
-  if (existing) {
-    throw new ApiError(409, "duplicate ruleVersionId in ruleset version");
-  }
-
-  if (rulesetVersion.executionMode === "SEQUENTIAL") {
-    if (input.orderPriority === undefined || input.orderPriority === null) {
-      throw new ApiError(400, "orderPriority is required for SEQUENTIAL execution mode");
-    }
-
-    const takenOrder = await prisma.rulesetEntry.findFirst({
-      where: {
-        rulesetVersionId,
-        orderPriority: input.orderPriority
-      }
-    });
-    if (takenOrder) {
-      throw new ApiError(409, "orderPriority must be unique within a SEQUENTIAL draft ruleset version");
-    }
   }
 
   return prisma.rulesetEntry.create({
@@ -400,10 +208,90 @@ export async function deleteRulesetEntry(prisma: PrismaClient, entryId: string) 
   await prisma.rulesetEntry.delete({ where: { entryId } });
 }
 
+export async function bulkMutateRulesetEntries(
+  prisma: PrismaClient,
+  input: {
+    rulesetVersionId: string;
+    actor: string;
+    operation: BulkOperation;
+    entries: Array<{ entryId: string; etag?: string; newOrder?: number }>;
+  }
+) {
+  return prisma.$transaction(async (tx) => {
+    const rulesetVersion = await tx.rulesetVersion.findUnique({ where: { rulesetVersionId: input.rulesetVersionId } });
+    if (!rulesetVersion) throw new ApiError(404, "ruleset version not found");
+    if (rulesetVersion.status !== "DRAFT") throw new ApiError(409, "bulk operations only allowed on DRAFT ruleset_version");
+    if (input.operation === "REORDER" && rulesetVersion.executionMode !== "SEQUENTIAL") {
+      throw new ApiError(400, "REORDER is only supported for SEQUENTIAL ruleset versions");
+    }
+
+    const rows = await tx.rulesetEntry.findMany({ where: { rulesetVersionId: input.rulesetVersionId } });
+    const byId = new Map(rows.map((row) => [row.entryId, row]));
+    const results: Array<{ entryId: string; status: "OK" | "CONFLICT" | "FORBIDDEN" | "VALIDATION_ERROR"; message: string }> = [];
+
+    for (const item of input.entries) {
+      const row = byId.get(item.entryId);
+      if (!row) {
+        results.push({ entryId: item.entryId, status: "VALIDATION_ERROR", message: "entry not found in ruleset version" });
+        continue;
+      }
+
+      if (item.etag && item.etag !== getRulesetEntryEtag(row)) {
+        results.push({ entryId: item.entryId, status: "CONFLICT", message: "entry etag mismatch" });
+        continue;
+      }
+
+      if (input.operation === "REORDER") {
+        if (item.newOrder === undefined || item.newOrder === null) {
+          results.push({ entryId: item.entryId, status: "VALIDATION_ERROR", message: "newOrder is required for REORDER" });
+          continue;
+        }
+
+        const conflict = rows.find((existing) => existing.entryId !== row.entryId && existing.orderPriority === item.newOrder);
+        if (conflict) {
+          results.push({ entryId: item.entryId, status: "CONFLICT", message: `order ${item.newOrder} already used by ${conflict.entryId}` });
+          continue;
+        }
+      }
+
+      const before = row;
+      let after: typeof row | null = null;
+      if (input.operation === "ENABLE") {
+        after = await tx.rulesetEntry.update({ where: { entryId: row.entryId }, data: { enabled: true } });
+      } else if (input.operation === "DISABLE") {
+        after = await tx.rulesetEntry.update({ where: { entryId: row.entryId }, data: { enabled: false } });
+      } else if (input.operation === "REMOVE") {
+        await tx.rulesetEntry.delete({ where: { entryId: row.entryId } });
+      } else if (input.operation === "REORDER") {
+        after = await tx.rulesetEntry.update({ where: { entryId: row.entryId }, data: { orderPriority: item.newOrder! } });
+      }
+
+      await tx.auditEvent.create({
+        data: {
+          actor: input.actor,
+          action: `RULESET_ENTRY_BULK_${input.operation}`,
+          entityType: "ruleset_entry",
+          entityId: row.entryId,
+          beforeJson: before,
+          afterJson: after
+        }
+      });
+
+      results.push({ entryId: item.entryId, status: "OK", message: "updated" });
+    }
+
+    const refreshed = await tx.rulesetVersion.findUnique({ where: { rulesetVersionId: input.rulesetVersionId } });
+    return {
+      results,
+      updatedRulesetVersionEtag: refreshed ? getRulesetVersionEtag(refreshed) : ""
+    };
+  });
+}
+
 function normalizeSort(sort: string | undefined, fallback: string[]) {
   return (sort ? sort.split(",") : fallback).map((token) => {
     const [field, dirRaw] = token.split(":");
-    return { field, dir: dirRaw === "desc" ? "desc" : "asc" as "asc" | "desc" };
+    return { field, dir: (dirRaw === "desc" ? "desc" : "asc") as "asc" | "desc" };
   });
 }
 
@@ -418,10 +306,7 @@ export async function getRulesetTable(
     ...(input.q
       ? {
           ruleset: {
-            OR: [
-              { name: { contains: input.q, mode: "insensitive" } },
-              { tags: { hasSome: [input.q] } }
-            ]
+            OR: [{ name: { contains: input.q, mode: "insensitive" } }, { tags: { hasSome: [input.q] } }]
           }
         }
       : {})
@@ -472,10 +357,7 @@ export async function getRulesetTableEntries(
   const size = Math.min(Math.max(input.size ?? 20, 1), 100);
   const entries = await prisma.rulesetEntry.findMany({
     where: { rulesetVersionId },
-    include: {
-      rule: true,
-      ruleVersion: true
-    },
+    include: { rule: true, ruleVersion: true },
     orderBy: [{ orderPriority: "asc" }, { entryId: "asc" }]
   });
 
@@ -512,64 +394,25 @@ export async function getRulesetTableEntries(
   const items = rows.slice(start, start + size);
   const nextCursor = start + size < rows.length ? Buffer.from(String(start + size)).toString("base64") : null;
   return { items, page: { size, nextCursor } };
-export async function patchRulesetEntry(
-  prisma: PrismaClient,
-  entryId: string,
-  input: { enabled?: boolean; orderPriority?: number }
-) {
-  const entry = await prisma.rulesetEntry.findUnique({
-    where: { entryId },
-    include: { rulesetVersion: true }
-  });
-  if (!entry) {
-    throw new ApiError(404, "entry not found");
-  }
-  if (entry.rulesetVersion.status !== "DRAFT") {
-    throw new ApiError(409, "entry can only be edited in DRAFT ruleset versions");
-  }
-
-  const data: { enabled?: boolean; orderPriority?: number | null } = {};
-  if (input.enabled !== undefined) {
-    data.enabled = input.enabled;
-  }
-
-  if (input.orderPriority !== undefined) {
-    if (entry.rulesetVersion.executionMode !== "SEQUENTIAL") {
-      throw new ApiError(400, "orderPriority can only be changed for SEQUENTIAL mode");
-    }
-
-    const conflict = await prisma.rulesetEntry.findFirst({
-      where: {
-        rulesetVersionId: entry.rulesetVersionId,
-        orderPriority: input.orderPriority,
-        NOT: { entryId }
-      }
-    });
-    if (conflict) {
-      throw new ApiError(409, "orderPriority must be unique within a SEQUENTIAL draft ruleset version");
-    }
-
-    data.orderPriority = input.orderPriority;
-  }
-
-  return prisma.rulesetEntry.update({
-    where: { entryId },
-    data
-  });
 }
 
-export async function deleteRulesetEntry(prisma: PrismaClient, entryId: string) {
-  const entry = await prisma.rulesetEntry.findUnique({
-    where: { entryId },
-    include: { rulesetVersion: true }
+export async function getAuditEvents(
+  prisma: PrismaClient,
+  input: { entityType?: string; actor?: string; from?: string; to?: string }
+) {
+  return prisma.auditEvent.findMany({
+    where: {
+      ...(input.entityType ? { entityType: input.entityType } : {}),
+      ...(input.actor ? { actor: input.actor } : {}),
+      ...(input.from || input.to
+        ? {
+            createdAt: {
+              ...(input.from ? { gte: new Date(input.from) } : {}),
+              ...(input.to ? { lte: new Date(input.to) } : {})
+            }
+          }
+        : {})
+    },
+    orderBy: { createdAt: "desc" }
   });
-
-  if (!entry) {
-    throw new ApiError(404, "entry not found");
-  }
-  if (entry.rulesetVersion.status !== "DRAFT") {
-    throw new ApiError(409, "entry can only be deleted in DRAFT ruleset versions");
-  }
-
-  await prisma.rulesetEntry.delete({ where: { entryId } });
 }

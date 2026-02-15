@@ -2,119 +2,95 @@ import assert from "node:assert/strict";
 import {
   activateRulesetVersion,
   addRulesetEntry,
-  ApiError,
+  bulkMutateRulesetEntries,
+  getRulesetEntryEtag,
+  getRulesetTable,
+  getRulesetTableEntries,
+  getRulesetVersionEtag,
   updateRulesetVersionSettings
 } from "./service.js";
 
-type RulesetVersion = {
-  rulesetVersionId: string;
-  rulesetId: string;
-  versionNumber: number;
-  status: "DRAFT" | "APPROVED" | "ACTIVE";
-  executionMode: "SEQUENTIAL" | "PARALLEL";
-  decisionPrecedence: unknown;
-  createdBy: string;
-  createdAt: Date;
-  approvedBy: string | null;
-  approvedAt: Date | null;
-  activatedBy: string | null;
-  activatedAt: Date | null;
-};
-
-type RuleVersion = {
-  ruleVersionId: string;
-  ruleId: string;
-  status: "DRAFT" | "APPROVED";
-  rule: { archivedAt: Date | null };
-};
-
-type Entry = {
-  entryId: string;
-  rulesetVersionId: string;
-  ruleId: string;
-  ruleVersionId: string;
-  enabled: boolean;
-  orderPriority: number | null;
-};
-
 function makePrismaFixture() {
-  const rulesetVersions: RulesetVersion[] = [
-    {
-      rulesetVersionId: "rv1",
-      rulesetId: "rs1",
-      versionNumber: 1,
-      status: "ACTIVE",
-      executionMode: "SEQUENTIAL",
-      decisionPrecedence: null,
-      createdBy: "a",
-      createdAt: new Date(),
-      approvedBy: "a",
-      approvedAt: new Date(),
-      activatedBy: "a",
-      activatedAt: new Date()
-    },
-    {
-      rulesetVersionId: "rv2",
-      rulesetId: "rs1",
-      versionNumber: 2,
-      status: "APPROVED",
-      executionMode: "SEQUENTIAL",
-      decisionPrecedence: null,
-      createdBy: "a",
-      createdAt: new Date(),
-      approvedBy: "a",
-      approvedAt: new Date(),
-      activatedBy: null,
-      activatedAt: null
-    }
+  const rulesets = [
+    { rulesetId: "rs1", name: "Alpha", tags: ["risk"], createdAt: new Date(), description: "", createdBy: "u", lastUpdatedAt: new Date() },
+    { rulesetId: "rs2", name: "Beta", tags: ["ops"], createdAt: new Date(), description: "", createdBy: "u", lastUpdatedAt: new Date() }
   ];
 
-  const ruleVersions: RuleVersion[] = [
-    { ruleVersionId: "rule-v1", ruleId: "rule-1", status: "APPROVED", rule: { archivedAt: null } }
+  const rulesetVersions: any[] = [
+    { rulesetVersionId: "rv1", rulesetId: "rs1", versionNumber: 1, status: "ACTIVE", executionMode: "SEQUENTIAL", decisionPrecedence: null, createdBy: "a", createdAt: new Date("2026-01-01"), approvedBy: "a", approvedAt: new Date(), activatedBy: "a", activatedAt: new Date(), ruleset: rulesets[0] },
+    { rulesetVersionId: "rv2", rulesetId: "rs1", versionNumber: 2, status: "APPROVED", executionMode: "SEQUENTIAL", decisionPrecedence: null, createdBy: "a", createdAt: new Date("2026-01-02"), approvedBy: "a", approvedAt: new Date(), activatedBy: null, activatedAt: null, ruleset: rulesets[0] },
+    { rulesetVersionId: "rv3", rulesetId: "rs2", versionNumber: 1, status: "DRAFT", executionMode: "PARALLEL", decisionPrecedence: ["BLOCK"], createdBy: "a", createdAt: new Date("2026-01-03"), approvedBy: null, approvedAt: null, activatedBy: null, activatedAt: null, ruleset: rulesets[1] }
   ];
+  const ruleVersions: any[] = [
+    { ruleVersionId: "rule-v1", ruleId: "rule-1", status: "APPROVED", versionNumber: 1, description: "BLOCK if ...", rule: { archivedAt: null, name: "R1", type: "FRAUD", tags: ["risk"] } },
+    { ruleVersionId: "rule-v2", ruleId: "rule-2", status: "APPROVED", versionNumber: 1, description: "ALLOW if ...", rule: { archivedAt: null, name: "A1", type: "BUSINESS", tags: ["ops"] } }
+  ];
+  const entries: any[] = [];
+  const auditEvents: any[] = [];
+  let lastEntriesWhere: any = null;
 
-  const entries: Entry[] = [];
-
-  const prisma = {
+  const prisma: any = {
     $transaction: async (fn: (tx: any) => Promise<unknown>) => fn(prisma),
     rulesetVersion: {
       findUnique: async ({ where: { rulesetVersionId } }: any) => rulesetVersions.find((v) => v.rulesetVersionId === rulesetVersionId) ?? null,
       updateMany: async ({ where, data }: any) => {
-        let count = 0;
         for (const v of rulesetVersions) {
-          if (v.rulesetId === where.rulesetId && v.status === where.status && v.rulesetVersionId !== where.NOT.rulesetVersionId) {
-            v.status = data.status;
-            v.activatedAt = data.activatedAt;
-            v.activatedBy = data.activatedBy;
-            count += 1;
-          }
+          if (v.rulesetId === where.rulesetId && v.status === where.status && v.rulesetVersionId !== where.NOT.rulesetVersionId) Object.assign(v, data);
         }
-        return { count };
+        return { count: 1 };
       },
       update: async ({ where: { rulesetVersionId }, data }: any) => {
         const found = rulesetVersions.find((v) => v.rulesetVersionId === rulesetVersionId);
-        if (!found) {
-          throw new Error("missing");
-        }
         Object.assign(found, data);
         return found;
-      }
+      },
+      findMany: async ({ where }: any) =>
+        rulesetVersions
+          .filter((v) => (!where.status || v.status === where.status) && (!where.executionMode || v.executionMode === where.executionMode))
+          .filter((v) => {
+            if (!where.ruleset) return true;
+            const q = where.ruleset.OR[0].name.contains.toLowerCase();
+            return v.ruleset.name.toLowerCase().includes(q) || v.ruleset.tags.includes(q);
+          })
+          .map((v) => ({ ...v, entries: entries.filter((e) => e.rulesetVersionId === v.rulesetVersionId) }))
     },
     ruleVersion: {
       findUnique: async ({ where: { ruleVersionId } }: any) => ruleVersions.find((v) => v.ruleVersionId === ruleVersionId) ?? null
     },
     rulesetEntry: {
       findFirst: async ({ where }: any) =>
-        entries.find((e) => e.rulesetVersionId === where.rulesetVersionId && (where.ruleVersionId ? e.ruleVersionId === where.ruleVersionId : e.orderPriority === where.orderPriority)) ?? null,
+        entries.find((e) => e.rulesetVersionId === where.rulesetVersionId && (where.ruleVersionId ? e.ruleVersionId === where.ruleVersionId : e.orderPriority === where.orderPriority) && (!where.NOT || e.entryId !== where.NOT.entryId)) ?? null,
+      findUnique: async ({ where: { entryId } }: any) => entries.find((e) => e.entryId === entryId) ?? null,
       create: async ({ data }: any) => {
-        const created: Entry = { entryId: `e${entries.length + 1}`, ...data };
+        const created = { entryId: `e${entries.length + 1}`, lastUpdatedAt: new Date(), ...data };
         entries.push(created);
         return created;
+      },
+      update: async ({ where: { entryId }, data }: any) => {
+        const found = entries.find((e) => e.entryId === entryId);
+        Object.assign(found, data, { lastUpdatedAt: new Date() });
+        return found;
+      },
+      delete: async ({ where: { entryId } }: any) => {
+        const idx = entries.findIndex((e) => e.entryId === entryId);
+        entries.splice(idx, 1);
+      },
+      findMany: async ({ where }: any) => {
+        lastEntriesWhere = where;
+        return entries
+          .filter((e) => e.rulesetVersionId === where.rulesetVersionId)
+          .map((e) => ({ ...e, rule: ruleVersions.find((r) => r.ruleId === e.ruleId).rule, ruleVersion: ruleVersions.find((r) => r.ruleVersionId === e.ruleVersionId) }));
+      }
+    },
+    auditEvent: {
+      create: async ({ data }: any) => {
+        auditEvents.push(data);
+        return data;
       }
     }
   };
 
-  return { prisma, rulesetVersions, entries };
+  return { prisma, rulesetVersions, entries, auditEvents, getLastEntriesWhere: () => lastEntriesWhere };
 }
 
 {
@@ -144,7 +120,7 @@ function makePrismaFixture() {
 }
 
 {
-  const { prisma, rulesetVersions } = makePrismaFixture();
+  const { rulesetVersions } = makePrismaFixture();
   const stale = getRulesetVersionEtag(rulesetVersions[0]);
   rulesetVersions[0].executionMode = "PARALLEL";
   rulesetVersions[0].decisionPrecedence = ["BLOCK"];
@@ -167,6 +143,43 @@ function makePrismaFixture() {
   assert.equal(childRows.items.length, 2);
   assert.equal(childRows.items[0].entryId, "e2");
   assert.equal(getLastEntriesWhere().rulesetVersionId, "rv1");
+}
+
+{
+  const { prisma, rulesetVersions, entries } = makePrismaFixture();
+  entries.push({ entryId: "e1", rulesetVersionId: "rv3", ruleId: "rule-1", ruleVersionId: "rule-v1", enabled: true, orderPriority: null, lastUpdatedAt: new Date() });
+  await assert.rejects(
+    () => bulkMutateRulesetEntries(prisma, { rulesetVersionId: "rv3", actor: "a", operation: "REORDER", entries: [{ entryId: "e1", newOrder: 1 }] }),
+    /REORDER is only supported/
+  );
+  assert.equal(rulesetVersions.find((rv) => rv.rulesetVersionId === "rv3")?.executionMode, "PARALLEL");
+}
+
+{
+  const { prisma, rulesetVersions, entries, auditEvents } = makePrismaFixture();
+  rulesetVersions[0].status = "DRAFT";
+  entries.push({ entryId: "e1", rulesetVersionId: "rv1", ruleId: "rule-1", ruleVersionId: "rule-v1", enabled: true, orderPriority: 1, lastUpdatedAt: new Date() });
+  entries.push({ entryId: "e2", rulesetVersionId: "rv1", ruleId: "rule-2", ruleVersionId: "rule-v2", enabled: true, orderPriority: 2, lastUpdatedAt: new Date() });
+
+  const stale = getRulesetEntryEtag(entries[0]);
+  entries[0].lastUpdatedAt = new Date(Date.now() + 5000);
+
+  const result = await bulkMutateRulesetEntries(prisma, {
+    rulesetVersionId: "rv1",
+    actor: "analyst@example.com",
+    operation: "DISABLE",
+    entries: [
+      { entryId: "e1", etag: stale },
+      { entryId: "e2", etag: getRulesetEntryEtag(entries[1]) }
+    ]
+  });
+
+  const conflict = result.results.find((r) => r.entryId === "e1");
+  const ok = result.results.find((r) => r.entryId === "e2");
+  assert.equal(conflict?.status, "CONFLICT");
+  assert.equal(ok?.status, "OK");
+  assert.equal(entries.find((e) => e.entryId === "e2")?.enabled, false);
+  assert.equal(auditEvents.length, 1);
 }
 
 console.log("rulesets.test.ts: all assertions passed");

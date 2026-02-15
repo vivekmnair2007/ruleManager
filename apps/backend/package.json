@@ -12,7 +12,6 @@
     "seed": "tsx prisma/seed.ts",
     "test:rule-logic": "tsx src/rules/ruleLogic.test.ts",
     "test:rulesets": "tsx src/rulesets/rulesets.test.ts"
-    "test:rule-logic": "tsx src/rules/ruleLogic.test.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.20.0",
