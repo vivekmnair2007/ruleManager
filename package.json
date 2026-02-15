@@ -1,0 +1,15 @@
+{
+  "name": "rule-management-portal",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev:backend": "npm --workspace apps/backend run dev",
+    "dev:frontend": "npm --workspace apps/frontend run dev",
+    "build": "npm --workspace apps/backend run build && npm --workspace apps/frontend run build",
+    "preflight:npm": "node scripts/check-npm-config.mjs",
+    "setup:npmrc": "node scripts/setup-npmrc.mjs"
+  }
+}

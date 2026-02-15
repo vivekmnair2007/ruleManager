@@ -1,0 +1,135 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum RuleType {
+  FRAUD
+  BUSINESS
+}
+
+enum RuleVersionStatus {
+  DRAFT
+  APPROVED
+}
+
+enum RulesetVersionStatus {
+  DRAFT
+  APPROVED
+  ACTIVE
+}
+
+enum ExecutionMode {
+  SEQUENTIAL
+  PARALLEL
+}
+
+model Rule {
+  ruleId         String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid @map("rule_id")
+  name           String
+  description    String
+  type           RuleType
+  tags           String[]      @default([])
+  archivedAt     DateTime?     @map("archived_at") @db.Timestamptz(6)
+  createdBy      String        @map("created_by")
+  createdAt      DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  lastUpdatedAt  DateTime      @default(now()) @map("last_updated_at") @db.Timestamptz(6)
+  versions       RuleVersion[]
+  rulesetEntries RulesetEntry[]
+
+  @@map("rule")
+  @@index([type], map: "ix_rule_type")
+  @@index([archivedAt], map: "ix_rule_archived_at")
+}
+
+model RuleVersion {
+  ruleVersionId  String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid @map("rule_version_id")
+  ruleId         String            @map("rule_id") @db.Uuid
+  versionNumber  Int               @map("version_number")
+  status         RuleVersionStatus @default(DRAFT)
+  logicAst       Json              @map("logic_ast")
+  decision       Json
+  changeSummary  String?           @map("change_summary")
+  createdBy      String            @map("created_by")
+  createdAt      DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  approvedBy     String?           @map("approved_by")
+  approvedAt     DateTime?         @map("approved_at") @db.Timestamptz(6)
+  rule           Rule              @relation(fields: [ruleId], references: [ruleId])
+  rulesetEntries RulesetEntry[]
+
+  @@map("rule_version")
+  @@unique([ruleId, versionNumber], map: "ux_rule_version_per_rule")
+  @@index([ruleId, status], map: "ix_rule_version_rule_status")
+}
+
+model Ruleset {
+  rulesetId       String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid @map("ruleset_id")
+  name            String
+  description     String
+  tags            String[]         @default([])
+  createdBy       String           @map("created_by")
+  createdAt       DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  lastUpdatedAt   DateTime         @default(now()) @map("last_updated_at") @db.Timestamptz(6)
+  versions        RulesetVersion[]
+
+  @@map("ruleset")
+  @@index([name], map: "ix_ruleset_name")
+}
+
+model RulesetVersion {
+  rulesetVersionId    String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid @map("ruleset_version_id")
+  rulesetId           String               @map("ruleset_id") @db.Uuid
+  versionNumber       Int                  @map("version_number")
+  status              RulesetVersionStatus @default(DRAFT)
+  executionMode       ExecutionMode        @map("execution_mode")
+  decisionPrecedence  Json?                @map("decision_precedence")
+  createdBy           String               @map("created_by")
+  createdAt           DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  approvedBy          String?              @map("approved_by")
+  approvedAt          DateTime?            @map("approved_at") @db.Timestamptz(6)
+  activatedBy         String?              @map("activated_by")
+  activatedAt         DateTime?            @map("activated_at") @db.Timestamptz(6)
+  ruleset             Ruleset              @relation(fields: [rulesetId], references: [rulesetId])
+  entries             RulesetEntry[]
+
+  @@map("ruleset_version")
+  @@unique([rulesetId, versionNumber], map: "ux_ruleset_version_per_ruleset")
+  @@index([rulesetId, status], map: "ix_ruleset_version_status")
+}
+
+model RulesetEntry {
+  entryId           String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid @map("entry_id")
+  rulesetVersionId  String         @map("ruleset_version_id") @db.Uuid
+  ruleId            String         @map("rule_id") @db.Uuid
+  ruleVersionId     String         @map("rule_version_id") @db.Uuid
+  enabled           Boolean        @default(true)
+  orderPriority     Int?           @map("order_priority")
+  createdAt         DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  lastUpdatedAt     DateTime       @default(now()) @map("last_updated_at") @db.Timestamptz(6)
+  rulesetVersion    RulesetVersion @relation(fields: [rulesetVersionId], references: [rulesetVersionId])
+  rule              Rule           @relation(fields: [ruleId], references: [ruleId])
+  ruleVersion       RuleVersion    @relation(fields: [ruleVersionId], references: [ruleVersionId])
+
+  @@map("ruleset_entry")
+  @@index([rulesetVersionId], map: "ix_ruleset_entry_ruleset_version")
+  @@index([ruleVersionId], map: "ix_ruleset_entry_rule_version")
+}
+
+model AuditEvent {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  actor       String
+  action      String
+  entityType  String   @map("entity_type")
+  entityId    String   @map("entity_id")
+  beforeJson  Json?    @map("before_json")
+  afterJson   Json?    @map("after_json")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("audit_event")
+  @@index([entityType, entityId], map: "ix_audit_event_entity")
+  @@index([createdAt], map: "ix_audit_event_created_at")
+}

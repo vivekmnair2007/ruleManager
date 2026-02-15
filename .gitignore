@@ -1,3 +1,21 @@
+node_modules/
+*.log
+.env
+.env.local
+
+# build artifacts
+dist/
+coverage/
+
+# local configs
+.vscode/
+.idea/
+.DS_Store
+
+# python leftovers
+__pycache__/
+*.py[cod]
+.venv/
 # Python cache / bytecode
 __pycache__/
 *.py[cod]
