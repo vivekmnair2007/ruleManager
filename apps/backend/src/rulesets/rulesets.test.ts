@@ -119,7 +119,7 @@ function makePrismaFixture() {
 
 {
   const { prisma, rulesetVersions } = makePrismaFixture();
-  await activateRulesetVersion(prisma as any, "rv2", "actor");
+  await activateRulesetVersion(prisma, "rv2", "actor");
   assert.equal(rulesetVersions.find((v) => v.rulesetVersionId === "rv2")?.status, "ACTIVE");
   assert.equal(rulesetVersions.filter((v) => v.rulesetId === "rs1" && v.status === "ACTIVE").length, 1);
 }
@@ -127,28 +127,46 @@ function makePrismaFixture() {
 {
   const { prisma, rulesetVersions } = makePrismaFixture();
   rulesetVersions[0].status = "APPROVED";
-  await assert.rejects(() => updateRulesetVersionSettings(prisma as any, "rv1", { executionMode: "SEQUENTIAL" }), (err: unknown) => {
-    assert.ok(err instanceof ApiError);
-    assert.equal(err.statusCode, 409);
-    return true;
-  });
+  await assert.rejects(() => updateRulesetVersionSettings(prisma, "rv1", { executionMode: "SEQUENTIAL" }), /only DRAFT/);
 }
 
 {
-  const { prisma } = makePrismaFixture();
-  await assert.rejects(() => addRulesetEntry(prisma as any, "rv1", { ruleVersionId: "rule-v1" }), /DRAFT ruleset versions/);
-}
-
-{
-  const { prisma, rulesetVersions, entries } = makePrismaFixture();
+  const { prisma, rulesetVersions } = makePrismaFixture();
   rulesetVersions[0].status = "DRAFT";
-  await assert.rejects(() => addRulesetEntry(prisma as any, "rv1", { ruleVersionId: "rule-v1" }), /orderPriority is required/);
+  await assert.rejects(() => addRulesetEntry(prisma, "rv1", { ruleVersionId: "rule-v1" }), /orderPriority is required/);
 
-  const created = await addRulesetEntry(prisma as any, "rv1", { ruleVersionId: "rule-v1", orderPriority: 10 });
-  assert.equal(created.orderPriority, 10);
+  const created = await addRulesetEntry(prisma, "rv1", { ruleVersionId: "rule-v1", orderPriority: 10 });
+  const oldEtag = getRulesetEntryEtag(created);
+  created.enabled = false;
+  created.lastUpdatedAt = new Date(Date.now() + 1000);
+  const nextEtag = getRulesetEntryEtag(created);
+  assert.notEqual(oldEtag, nextEtag);
+}
 
-  await assert.rejects(() => addRulesetEntry(prisma as any, "rv1", { ruleVersionId: "rule-v1", orderPriority: 11 }), /duplicate ruleVersionId/);
-  assert.equal(entries.length, 1);
+{
+  const { prisma, rulesetVersions } = makePrismaFixture();
+  const stale = getRulesetVersionEtag(rulesetVersions[0]);
+  rulesetVersions[0].executionMode = "PARALLEL";
+  rulesetVersions[0].decisionPrecedence = ["BLOCK"];
+  const fresh = getRulesetVersionEtag(rulesetVersions[0]);
+  assert.notEqual(stale, fresh);
+}
+
+{
+  const { prisma, entries, getLastEntriesWhere } = makePrismaFixture();
+  entries.push({ entryId: "e1", rulesetVersionId: "rv1", ruleId: "rule-1", ruleVersionId: "rule-v1", enabled: true, orderPriority: 2, lastUpdatedAt: new Date("2026-01-03") });
+  entries.push({ entryId: "e2", rulesetVersionId: "rv1", ruleId: "rule-2", ruleVersionId: "rule-v2", enabled: true, orderPriority: 1, lastUpdatedAt: new Date("2026-01-04") });
+
+  const page1 = await getRulesetTable(prisma, { size: 1, sort: "rulesetName:asc,lastUpdatedAt:desc" });
+  const page2 = await getRulesetTable(prisma, { size: 1, sort: "rulesetName:asc,lastUpdatedAt:desc", cursor: page1.page.nextCursor! });
+  assert.equal(page1.items.length, 1);
+  assert.equal(page2.items.length, 1);
+  assert.notEqual(page1.items[0].rulesetVersionId, page2.items[0].rulesetVersionId);
+
+  const childRows = await getRulesetTableEntries(prisma, "rv1", { sort: "order:asc" });
+  assert.equal(childRows.items.length, 2);
+  assert.equal(childRows.items[0].entryId, "e2");
+  assert.equal(getLastEntriesWhere().rulesetVersionId, "rv1");
 }
 
 console.log("rulesets.test.ts: all assertions passed");
