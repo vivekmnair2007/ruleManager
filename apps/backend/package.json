@@ -10,6 +10,8 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "seed": "tsx prisma/seed.ts",
+    "test:rule-logic": "tsx src/rules/ruleLogic.test.ts",
+    "test:rulesets": "tsx src/rulesets/rulesets.test.ts"
     "test:rule-logic": "tsx src/rules/ruleLogic.test.ts"
   },
   "dependencies": {
